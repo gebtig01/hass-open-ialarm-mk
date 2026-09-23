@@ -147,6 +147,73 @@ async def test_handle_panel_event_unknown_cid_triggers_refresh(coordinator, mock
     mock_client.get_status.assert_called()
 
 
+async def test_handle_panel_event_triggered_saves_zone(coordinator, hass):
+    """TRIGGERED event with Zone → zone saved and binary sensor marked open."""
+    zone = ZoneModel(1, "Interna", 1, ZoneStatusEnum.IN_USE)
+    coordinator.async_set_updated_data(
+        IAlarmMkData(
+            status=AlarmStatusModel(status=AlarmStatusEnum.DISARMED),
+            zones=[zone],
+        )
+    )
+    events = []
+    hass.bus.async_listen("open_ialarm_mk_alarm", lambda event: events.append(event.data))
+
+    await coordinator._async_handle_panel_event(
+        {"Cid": 1132, "Zone": 1, "ZoneName": "Interna", "Time": "2026-09-21 22:11:57"}
+    )
+
+    data = coordinator.data
+    assert data.last_alarm_zone == 1
+    assert data.last_alarm_zone_name == "Interna"
+    assert data.last_alarm_cid == "1132"
+    assert data.zones[0].status & ZoneStatusEnum.ALARM
+    assert data.zones[0].status & ZoneStatusEnum.FAULT
+    assert events and events[0]["zone"] == 1
+    assert events[0]["zone_name"] == "Interna"
+
+
+async def test_handle_panel_event_disarm_preserves_last_alarm(coordinator):
+    """Disarm event must not clobber the last triggered zone."""
+    coordinator.async_set_updated_data(
+        IAlarmMkData(
+            status=AlarmStatusModel(status=AlarmStatusEnum.TRIGGERED),
+            zones=[],
+            last_alarm_zone=2,
+            last_alarm_zone_name="SOGG. LATO",
+            last_alarm_cid="1132",
+        )
+    )
+
+    await coordinator._async_handle_panel_event({"Cid": 1401})  # DISARMED
+
+    data = coordinator.data
+    assert data.status.status == AlarmStatusEnum.DISARMED
+    assert data.last_alarm_zone == 2
+    assert data.last_alarm_zone_name == "SOGG. LATO"
+    assert data.last_alarm_cid == "1132"
+
+
+async def test_update_data_preserves_last_alarm_fields(coordinator, mock_client):
+    """Polling must keep the zone from the last alarm."""
+    mock_client.get_status.return_value = AlarmStatusModel(status=AlarmStatusEnum.DISARMED)
+    mock_client.get_zones.return_value = []
+    coordinator.async_set_updated_data(
+        IAlarmMkData(
+            status=AlarmStatusModel(status=AlarmStatusEnum.DISARMED),
+            zones=[],
+            last_alarm_zone=2,
+            last_alarm_zone_name="SOGG. LATO",
+        )
+    )
+
+    data = await coordinator._async_update_data()
+
+    assert data.status.status == AlarmStatusEnum.DISARMED
+    assert data.last_alarm_zone == 2
+    assert data.last_alarm_zone_name == "SOGG. LATO"
+
+
 # ── alarm commands ──────────────────────────────────────────────────────────
 
 async def test_async_arm_away_calls_client(coordinator, mock_client):

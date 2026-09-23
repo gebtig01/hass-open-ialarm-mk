@@ -18,6 +18,7 @@ from open_ialarm_mk_local_api import (
     IAlarmMkConnectionError,
     IAlarmMkLoginError,
     IAlarmMkPushClient,
+    ZoneStatusEnum,
 )
 from open_ialarm_mk_local_api.models.alarm_status_model import AlarmStatusModel
 from open_ialarm_mk_local_api.models.network_info_model import NetworkInfoModel
@@ -33,6 +34,10 @@ _LOGGER = logging.getLogger(__name__)
 class IAlarmMkData:
     status: AlarmStatusModel
     zones: list[ZoneModel]
+    last_alarm_zone: int | None = None
+    last_alarm_zone_name: str | None = None
+    last_alarm_cid: str | None = None
+    last_alarm_time: str | None = None
 
 
 class IAlarmMkCoordinator(DataUpdateCoordinator[IAlarmMkData]):
@@ -87,8 +92,60 @@ class IAlarmMkCoordinator(DataUpdateCoordinator[IAlarmMkData]):
         """
         new_status = resolve_cid_status(event)
         if new_status is not None and self.data is not None:
+            zone = event.get("Zone")
+            zone_name = event.get("ZoneName")
+            cid = event.get("Cid")
+            alarm_time = event.get("Time")
+            if cid is not None:
+                cid = str(cid)
+            if alarm_time is not None and not isinstance(alarm_time, str):
+                alarm_time = str(alarm_time)
+
+            previous = self.data
+            zones = previous.zones
+            last_alarm_zone = previous.last_alarm_zone
+            last_alarm_zone_name = previous.last_alarm_zone_name
+            last_alarm_cid = previous.last_alarm_cid
+            last_alarm_time = previous.last_alarm_time
+
+            if new_status is AlarmStatusEnum.TRIGGERED and zone is not None:
+                last_alarm_zone = zone
+                last_alarm_zone_name = zone_name
+                last_alarm_cid = cid
+                last_alarm_time = alarm_time
+                if isinstance(zone, int):
+                    zones = [
+                        ZoneModel(
+                            index=z.index,
+                            name=z.name,
+                            zone_type=z.zone_type,
+                            status=z.status | ZoneStatusEnum.ALARM | ZoneStatusEnum.FAULT,
+                        )
+                        if z.index == zone
+                        else z
+                        for z in zones
+                    ]
+                self.hass.bus.async_fire(
+                    "open_ialarm_mk_alarm",
+                    {
+                        "cid": cid,
+                        "zone": last_alarm_zone,
+                        "zone_name": last_alarm_zone_name,
+                        "time": alarm_time,
+                        "status": new_status.name,
+                    },
+                )
+                await asyncio.sleep(0.01)
+
             self.async_set_updated_data(
-                IAlarmMkData(status=AlarmStatusModel(status=new_status), zones=self.data.zones)
+                IAlarmMkData(
+                    status=AlarmStatusModel(status=new_status),
+                    zones=zones,
+                    last_alarm_zone=last_alarm_zone,
+                    last_alarm_zone_name=last_alarm_zone_name,
+                    last_alarm_cid=last_alarm_cid,
+                    last_alarm_time=last_alarm_time,
+                )
             )
         else:
             await self.async_refresh()
@@ -106,7 +163,15 @@ class IAlarmMkCoordinator(DataUpdateCoordinator[IAlarmMkData]):
                 if status.status == AlarmStatusEnum.UNAVAILABLE:
                     _LOGGER.warning("Status still UNAVAILABLE after retry, raising UpdateFailed")
                     raise UpdateFailed("iAlarm-MK returned UNAVAILABLE status after retry")
-            return IAlarmMkData(status=status, zones=zones)
+            previous = self.data
+            return IAlarmMkData(
+                status=status,
+                zones=zones,
+                last_alarm_zone=previous.last_alarm_zone if previous else None,
+                last_alarm_zone_name=previous.last_alarm_zone_name if previous else None,
+                last_alarm_cid=previous.last_alarm_cid if previous else None,
+                last_alarm_time=previous.last_alarm_time if previous else None,
+            )
         except (IAlarmMkConnectionError, IAlarmMkLoginError) as err:
             self._handle_poll_failure(err)
             raise UpdateFailed(f"Connection error polling iAlarm-MK: {err}") from err

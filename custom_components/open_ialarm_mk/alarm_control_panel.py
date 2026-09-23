@@ -69,6 +69,18 @@ class IAlarmMkPanel(CoordinatorEntity[IAlarmMkCoordinator], AlarmControlPanelEnt
             return None
         return _STATUS_MAP.get(self.coordinator.data.status.status)
 
+    @property
+    def extra_state_attributes(self) -> dict[str, object] | None:
+        if self.coordinator.data is None:
+            return None
+        data = self.coordinator.data
+        return {
+            "last_alarm_zone": data.last_alarm_zone,
+            "last_alarm_zone_name": data.last_alarm_zone_name,
+            "last_alarm_cid": data.last_alarm_cid,
+            "last_alarm_time": data.last_alarm_time,
+        }
+
     async def async_alarm_disarm(self, code: str | None = None) -> None:
         await self.coordinator.async_disarm()
 

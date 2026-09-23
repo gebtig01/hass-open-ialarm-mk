@@ -100,6 +100,29 @@ def test_device_info_identifiers(panel, mock_network_info):
     assert (DOMAIN, mock_network_info.mac) in panel.device_info["identifiers"]
 
 
+def test_extra_state_attributes_none_when_no_data(panel):
+    panel.coordinator.async_set_updated_data(None)
+    assert panel.extra_state_attributes is None
+
+
+def test_extra_state_attributes_reflect_last_alarm(panel):
+    panel.coordinator.async_set_updated_data(
+        IAlarmMkData(
+            status=AlarmStatusModel(status=AlarmStatusEnum.TRIGGERED),
+            zones=[],
+            last_alarm_zone=2,
+            last_alarm_zone_name="SOGG. LATO",
+            last_alarm_cid="1132",
+            last_alarm_time="2026-09-21 22:11:57",
+        )
+    )
+    attrs = panel.extra_state_attributes
+    assert attrs is not None
+    assert attrs["last_alarm_zone"] == 2
+    assert attrs["last_alarm_zone_name"] == "SOGG. LATO"
+    assert attrs["last_alarm_cid"] == "1132"
+
+
 # ── command delegation ──────────────────────────────────────────────────────
 
 async def test_async_alarm_disarm_delegates(panel, mock_client):
